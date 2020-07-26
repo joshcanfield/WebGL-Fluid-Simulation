@@ -402,8 +402,6 @@ class AudioInput {
         } else {
             console.log('getUserMedia not supported on your browser!');
         }
-
-
     }
 
     start() {
@@ -437,9 +435,6 @@ class AudioInput {
         this.oddEven = this.oddEven ? 0 : 1;
 
         this.analyser.getByteTimeDomainData(dataArray);
-
-        console.log('A', dataArray);
-        console.log('B', lastDataArray);
 
         for (let i = 1; i <= this.bufferLength; ++i) {
             let pointer = pointers[i]
