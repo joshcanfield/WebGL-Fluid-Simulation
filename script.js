@@ -53,6 +53,10 @@ let config = {
     SUNRAYS: true,
     SUNRAYS_RESOLUTION: 196,
     SUNRAYS_WEIGHT: 1.0,
+    // Chrome requires a button click to enable audio
+    // @see https://developers.google.com/web/updates/2017/09/autoplay-policy-changes#webaudio
+    AUDIO: false,
+    AUDIO_SENSITIVITY: 0.1,
 }
 
 function pointerPrototype () {
@@ -207,6 +211,10 @@ function startGUI () {
     captureFolder.add(config, 'TRANSPARENT').name('transparent');
     captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
 
+    let audioFolder = gui.addFolder("Audio");
+    audioFolder.add(config, 'AUDIO').name('enabled').onFinishChange(updateAudio);
+    audioFolder.add(config, 'AUDIO_SENSITIVITY', 0.0, 1.0).name("var");
+
     let github = gui.add({ fun : () => {
         window.open('https://github.com/PavelDoGreat/WebGL-Fluid-Simulation');
         ga('send', 'event', 'link button', 'github');
@@ -249,6 +257,10 @@ function startGUI () {
 
     if (isMobile())
         gui.close();
+}
+
+function updateAudio() {
+    audioInput.enable(config.AUDIO);
 }
 
 function isMobile () {
@@ -318,6 +330,131 @@ function downloadURI (filename, uri) {
     link.click();
     document.body.removeChild(link);
 }
+
+class AudioInput {
+    constructor() {
+
+    }
+    enable(enable) {
+        this.init();
+        if (!enable && this.interval) {
+            this.stop();
+        }
+        if (enable && !this.interval) {
+            this.start();
+        }
+    }
+
+    // @see https://github.com/mdn/voice-change-o-matic/blob/gh-pages/scripts/app.js#L128-L205
+    init() {
+        if (this.audioCtx) {
+            return;
+        }
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        this.analyser = this.audioCtx.createAnalyser();
+        this.analyser.minDecibels = -90;
+        this.analyser.maxDecibels = -10;
+        this.analyser.smoothingTimeConstant = 0.85;
+        this.analyser.fftSize = 32;
+        this.bufferLength = this.analyser.frequencyBinCount;
+        this.oddDataArray = new Uint8Array(this.bufferLength);
+        this.evenDataArray = new Uint8Array(this.bufferLength);
+
+        // Older browsers might not implement mediaDevices at all, so we set an empty object first
+        if (navigator.mediaDevices === undefined) {
+            navigator.mediaDevices = {};
+        }
+
+        // Some browsers partially implement mediaDevices. We can't just assign an object
+        // with getUserMedia as it would overwrite existing properties.
+        // Here, we will just add the getUserMedia property if it's missing.
+        if (navigator.mediaDevices.getUserMedia === undefined) {
+            navigator.mediaDevices.getUserMedia = function (constraints) {
+
+                // First get ahold of the legacy getUserMedia, if present
+                var getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+
+                // Some browsers just don't implement it - return a rejected promise with an error
+                // to keep a consistent interface
+                if (!getUserMedia) {
+                    return Promise.reject(new Error('getUserMedia is not implemented in this browser'));
+                }
+
+                // Otherwise, wrap the call to the old navigator.getUserMedia with a Promise
+                return new Promise(function (resolve, reject) {
+                    getUserMedia.call(navigator, constraints, resolve, reject);
+                });
+            }
+        }
+        if (navigator.mediaDevices.getUserMedia) {
+            console.log('getUserMedia supported.');
+            let constraints = {audio: true}
+            let _this = this;
+            navigator.mediaDevices.getUserMedia(constraints)
+                .then(
+                    function (stream) {
+                        let source = _this.audioCtx.createMediaStreamSource(stream);
+                        source.connect(_this.analyser);
+                    })
+                .catch(function (err) {
+                    console.log('The following gUM error occured: ' + err);
+                })
+        } else {
+            console.log('getUserMedia not supported on your browser!');
+        }
+
+
+    }
+
+    start() {
+        while (this.bufferLength >= pointers.length) {
+            pointers.push(new pointerPrototype());
+        }
+
+        for (let i = 1; i <= this.bufferLength; ++i) {
+            let pointer = pointers[i]
+            let posX = i/this.bufferLength;
+            let posY = canvas.height;
+            updatePointerDownData(pointer, -1, posX, posY);
+        }
+
+        this.interval = window.setInterval((
+            function (self) {
+                return function () {
+                    self.draw()
+                }
+            })(this), 100);
+    }
+
+    stop() {
+        window.clearInterval(this.interval)
+        this.interval = undefined;
+    }
+
+    draw() {
+        let dataArray = this.oddEven ? this.oddDataArray : this.evenDataArray;
+        let lastDataArray = this.oddEven ? this.evenDataArray : this.oddDataArray;
+        this.oddEven = this.oddEven ? 0 : 1;
+
+        this.analyser.getByteTimeDomainData(dataArray);
+
+        console.log('A', dataArray);
+        console.log('B', lastDataArray);
+
+        for (let i = 1; i <= this.bufferLength; ++i) {
+            let pointer = pointers[i]
+
+            const x = i / this.bufferLength* canvas.width;
+            const change = Math.abs(lastDataArray[i-1] - dataArray[i-1])/128.0;
+            if (change < config.AUDIO_SENSITIVITY) {
+                const y = dataArray[i - 1] / 128.0 * canvas.height;
+                updatePointerMoveData(pointer, x, y);
+            }
+        }
+    }
+}
+
+let audioInput = new AudioInput();
 
 class Material {
     constructor (vertexShader, fragmentShaderSource) {
